@@ -1,0 +1,246 @@
+// ==========================================================
+// Schema MySQL — Sistema de Gestión (ex sisges4 Google Apps Script)
+// Normalizado a partir de: BD_Ferreteria, Base de Clientes, Base
+// de Proveedores, Ventas, Compras (Comprobantes/Pagos), Gastos Varios.
+// ==========================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Catálogos ----------
+
+// Reemplaza el mapping hardcodeado {"1","2","3"} del código original
+// por una tabla real, evitando repetir el mismo mapeo en cada función.
+model CategoriaCliente {
+  id       Int       @id @default(autoincrement())
+  nombre   String    @unique // "Resp. Inscripto" | "Consumidor Final" | "Cliente con c/corriente"
+  clientes Cliente[]
+
+  @@map("categorias_cliente")
+}
+
+// Reemplaza el string libre "Efectivo" / "Cuenta corriente" / "Transferencia"
+// repetido en ventas, cobros, pagos y gastos.
+// Catálogo extensible de impuestos (hoy IVA/IIBB). La alícuota vive acá
+// para que el reporte impositivo sea el mismo código sin importar cuántos
+// impuestos se agreguen — y a futuro, cuando un impuesto se pueda asociar
+// a una venta o comprobante puntual, este catálogo es la base para eso.
+model Impuesto {
+  id       Int     @id @default(autoincrement())
+  nombre   String  @unique // "IVA", "IIBB", ...
+  alicuota Decimal @db.Decimal(6, 4) // ej 0.2100 = 21%
+
+  @@map("impuestos")
+}
+
+model FormaPago {
+  id     Int    @id @default(autoincrement())
+  nombre String @unique
+
+  ventas         Venta[]
+  cobrosCC       CobroCC[]
+  comprasPagos   CompraPago[]
+  gastosVarios   GastoVario[]
+
+  @@map("formas_pago")
+}
+
+// ---------- Terceros ----------
+
+model Cliente {
+  id            Int              @id @default(autoincrement())
+  nombre        String
+  dniCuit       String?          @map("dni_cuit")
+  categoriaId   Int              @map("categoria_id")
+  categoria     CategoriaCliente @relation(fields: [categoriaId], references: [id])
+  createdAt     DateTime         @default(now()) @map("created_at")
+
+  ventas     Venta[]
+  cobrosCC   CobroCC[]
+
+  @@map("clientes")
+}
+
+model Proveedor {
+  id         Int      @id @default(autoincrement())
+  nombre     String
+  cuit       String?
+  categoria  String?  // rubro del proveedor (ej "Mercadería"), no confundir con CategoriaCliente
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  comprobantes CompraComprobante[]
+  pagos        CompraPago[]
+
+  @@map("proveedores")
+}
+
+// ---------- Stock ----------
+
+// Los % y $ por tipo de comprador NO se calculan acá: el precio de venta
+// se calcula en el service (misma fórmula que calcularPrecio() del GAS
+// original) a partir de costo + porcentaje, para no guardar datos derivados
+// que se puedan desincronizar del costo real.
+model Producto {
+  id             Int      @id @default(autoincrement())
+  nombre         String
+  rubro          String?
+  tipo           String?
+  stock          Decimal  @default(0) @db.Decimal(12, 2)
+  costo          Decimal  @db.Decimal(12, 2)
+  pctRespInsc    Decimal  @map("pct_resp_insc")    @db.Decimal(6, 4)
+  pctConsFinal   Decimal  @map("pct_cons_final")   @db.Decimal(6, 4)
+  pctCtaCte      Decimal  @map("pct_cta_cte")      @db.Decimal(6, 4)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  ventasDetalle       VentaDetalle[]
+  comprobanteItems    CompraComprobanteItem[]
+
+  @@map("productos")
+}
+
+// ---------- Ventas ----------
+
+model Venta {
+  id          Int            @id @default(autoincrement())
+  fecha       DateTime       @default(now())
+  clienteId   Int            @map("cliente_id")
+  cliente     Cliente        @relation(fields: [clienteId], references: [id])
+  formaPagoId Int            @map("forma_pago_id")
+  formaPago   FormaPago      @relation(fields: [formaPagoId], references: [id])
+  detalle     VentaDetalle[]
+
+  @@map("ventas")
+}
+
+model VentaDetalle {
+  id              Int      @id @default(autoincrement())
+  ventaId         Int      @map("venta_id")
+  venta           Venta    @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  productoId      Int      @map("producto_id")
+  producto        Producto @relation(fields: [productoId], references: [id])
+  cantidad        Decimal  @db.Decimal(12, 2)
+  precioUnitario  Decimal  @map("precio_unitario") @db.Decimal(12, 2) // precio de venta ya calculado
+  costoUnitario   Decimal  @map("costo_unitario")  @db.Decimal(12, 2) // costo del producto AL MOMENTO de vender — necesario para el CMV del reporte de resultado
+  subtotal        Decimal  @db.Decimal(12, 2)
+
+  @@map("ventas_detalle")
+}
+
+// Cuenta corriente de clientes: cada fila es un movimiento (venta a
+// cta cte, o un cobro posterior). Reemplaza la hoja "Cobros_CC".
+model CobroCC {
+  id            Int       @id @default(autoincrement())
+  fecha         DateTime  @default(now())
+  clienteId     Int       @map("cliente_id")
+  cliente       Cliente   @relation(fields: [clienteId], references: [id])
+  concepto      String
+  debe          Decimal   @default(0) @db.Decimal(12, 2)
+  haber         Decimal   @default(0) @db.Decimal(12, 2)
+  formaPagoId   Int?      @map("forma_pago_id")
+  formaPago     FormaPago? @relation(fields: [formaPagoId], references: [id])
+  observaciones String?   @db.Text
+
+  @@map("cobros_cc")
+}
+
+// ---------- Compras ----------
+
+enum TipoComprobante {
+  FACTURA_MERCADERIA
+  NOTA_DEBITO
+  NOTA_CREDITO
+}
+
+enum EstadoComprobante {
+  PENDIENTE
+  PAGO_PARCIAL
+  PAGADO
+  CREDITO_DISPONIBLE
+}
+
+model CompraComprobante {
+  id                  Int                     @id @default(autoincrement())
+  fecha               DateTime                @default(now())
+  tipo                TipoComprobante
+  proveedorId         Int                     @map("proveedor_id")
+  proveedor           Proveedor               @relation(fields: [proveedorId], references: [id])
+  nroComprobante      String?                 @map("nro_comprobante")
+  detalle             String?                 @db.Text
+  neto                Decimal                 @default(0) @db.Decimal(12, 2)
+  iva                 Decimal                 @default(0) @db.Decimal(12, 2)
+  iibb                Decimal                 @default(0) @db.Decimal(12, 2)
+  noGravado           Decimal                 @default(0) @map("no_gravado") @db.Decimal(12, 2)
+  montoTotal          Decimal                 @map("monto_total") @db.Decimal(12, 2)
+  saldo               Decimal                 @db.Decimal(12, 2)
+  estado              EstadoComprobante       @default(PENDIENTE)
+  comprobanteVinculadoId Int?                 @map("comprobante_vinculado_id")
+  comprobanteVinculado   CompraComprobante?   @relation("VinculoComprobantes", fields: [comprobanteVinculadoId], references: [id])
+  vinculos            CompraComprobante[]     @relation("VinculoComprobantes")
+
+  items               CompraComprobanteItem[]
+  pagos               CompraPagoComprobante[]
+
+  @@map("compras_comprobantes")
+}
+
+// Ítems de un comprobante "Factura Mercadería" — reemplaza la lógica de
+// actualizarStock() del GAS, ahora con historial real en vez de solo
+// sumar/pisar la fila del stock.
+model CompraComprobanteItem {
+  id             Int               @id @default(autoincrement())
+  comprobanteId  Int               @map("comprobante_id")
+  comprobante    CompraComprobante @relation(fields: [comprobanteId], references: [id], onDelete: Cascade)
+  productoId     Int               @map("producto_id")
+  producto       Producto          @relation(fields: [productoId], references: [id])
+  cantidad       Decimal           @db.Decimal(12, 2)
+  costoUnitario  Decimal           @map("costo_unitario") @db.Decimal(12, 2)
+
+  @@map("compras_comprobante_items")
+}
+
+model CompraPago {
+  id           Int                     @id @default(autoincrement())
+  fecha        DateTime                @default(now())
+  proveedorId  Int                     @map("proveedor_id")
+  proveedor    Proveedor               @relation(fields: [proveedorId], references: [id])
+  importe      Decimal                 @db.Decimal(12, 2)
+  formaPagoId  Int                     @map("forma_pago_id")
+  formaPago    FormaPago               @relation(fields: [formaPagoId], references: [id])
+  comprobantes CompraPagoComprobante[]
+
+  @@map("compras_pagos")
+}
+
+// Un pago puede cancelar varios comprobantes a la vez (tabla puente,
+// reemplaza el "comprobantesPagados.join(',')" del código original).
+model CompraPagoComprobante {
+  pagoId        Int               @map("pago_id")
+  pago          CompraPago        @relation(fields: [pagoId], references: [id], onDelete: Cascade)
+  comprobanteId Int               @map("comprobante_id")
+  comprobante   CompraComprobante @relation(fields: [comprobanteId], references: [id])
+
+  @@id([pagoId, comprobanteId])
+  @@map("compras_pagos_comprobantes")
+}
+
+// ---------- Gastos varios ----------
+
+model GastoVario {
+  id           Int       @id @default(autoincrement())
+  nombreCorto  String    @map("nombre_corto")
+  fecha        DateTime  @default(now())
+  tipo         String    // ej "Gastos de Oficina" — candidato a catálogo propio si la lista crece
+  descripcion  String?   @db.Text
+  importe      Decimal   @db.Decimal(12, 2)
+  formaPagoId  Int       @map("forma_pago_id")
+  formaPago    FormaPago @relation(fields: [formaPagoId], references: [id])
+
+  @@map("gastos_varios")
+}

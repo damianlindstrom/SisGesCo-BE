@@ -1,0 +1,19 @@
+# Levanta un MySQL local para desarrollo. No usar en producción tal cual
+# (password en texto plano) — para eso, en la etapa de hosting, usamos
+# la base gestionada del proveedor que elijamos.
+version: '3.8'
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: sisges
+      MYSQL_USER: sisges
+      MYSQL_PASSWORD: sisges
+    ports:
+      - '3306:3306'
+    volumes:
+      - sisges_mysql_data:/var/lib/mysql
+volumes:
+  sisges_mysql_data:
