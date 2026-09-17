@@ -12,7 +12,14 @@ export const reportesService = {
       }),
       prisma.compraComprobante.findMany({
         where: { fecha: { gte: desde, lte: hasta }, tipo: 'FACTURA_MERCADERIA' },
-        include: { proveedor: true },
+        include: { 
+          proveedor: true, 
+          impuestos: {
+            include: {
+              impuesto: true,
+            },
+          }, 
+        },
       }),
     ]);
 
@@ -29,11 +36,21 @@ export const reportesService = {
         };
       }),
       // En compras sí hay un monto real cargado en el comprobante.
-      ...comprobantes.map((c) => ({
-        fecha: c.fecha, origen: 'COMPRA' as const, concepto: c.nroComprobante ?? `Comprobante #${c.id}`,
-        contraparte: c.proveedor.nombre, neto: Number(c.neto),
-        montoImpuesto: Number(impuesto.nombre === 'IVA' ? c.iva : impuesto.nombre === 'IIBB' ? c.iibb : 0),
-      })),
+      ...comprobantes.map((c) => {
+        // Buscamos si este comprobante tiene aplicado el impuesto del reporte (por ID o por coincidencia de nombre)
+        const impuestoAplicado = c.impuestos?.find(
+          (i: any) => i.impuestoId === impuesto.id || i.impuesto?.impuesto?.nombre?.toLowerCase() === impuesto.nombre?.toLowerCase()
+        );
+
+        return {
+          fecha: c.fecha, 
+          origen: 'COMPRA' as const, 
+          concepto: c.nroComprobante ?? `Comprobante #${c.id}`,
+          contraparte: c.proveedor.nombre, 
+          neto: Number(c.neto),
+          montoImpuesto: Number(impuestoAplicado?.monto ?? 0),
+        };
+      }),
     ].sort((a, b) => a.fecha.getTime() - b.fecha.getTime());
 
     return {
@@ -49,7 +66,11 @@ export const reportesService = {
   async resultadoPeriodo(desde: Date, hasta: Date) {
     const [ventas, comprobantes, gastos] = await Promise.all([
       prisma.venta.findMany({ where: { fecha: { gte: desde, lte: hasta } }, include: { detalle: true } }),
-      prisma.compraComprobante.findMany({ where: { fecha: { gte: desde, lte: hasta } }, include: { proveedor: true } }),
+      prisma.compraComprobante.findMany({ where: { fecha: { gte: desde, lte: hasta } }, include: { proveedor: true, impuestos: {
+      include: {
+        impuesto: true,
+      },
+    }, } }),
       prisma.gastoVario.findMany({ where: { fecha: { gte: desde, lte: hasta } }, include: { formaPago: true } }),
     ]);
 
