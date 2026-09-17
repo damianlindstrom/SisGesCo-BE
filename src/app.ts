@@ -3,13 +3,15 @@ import cors from 'cors';
 import { errorHandler } from './common/error-handler';
 import productosRouter from './modules/productos/productos.controller';
 import categoriasClienteRouter from './modules/categorias-cliente/categorias-cliente.controller';
-import impuestosRouter from './modules/impuestos/impuestos.controller';
+import impuestosRouter from './modules/parametros/impuestos.controller';
+import formasPagoRouter from './modules/parametros/formas-pago.controller';
 import clientesRouter from './modules/clientes/clientes.controller';
 import proveedoresRouter from './modules/proveedores/proveedores.controller';
 import ventasRouter from './modules/ventas/ventas.controller';
 import comprasRouter from './modules/compras/compras.controller';
 import gastosRouter from './modules/gastos/gastos.controller';
 import reportesRouter from './modules/reportes/reportes.controller';
+
 
 export function crearApp() {
   const app = express();
@@ -19,13 +21,14 @@ export function crearApp() {
 
   app.use('/api/productos', productosRouter);
   app.use('/api/categorias-cliente', categoriasClienteRouter);
-  app.use('/api/impuestos', impuestosRouter);
   app.use('/api/clientes', clientesRouter);
   app.use('/api/proveedores', proveedoresRouter);
   app.use('/api/ventas', ventasRouter);
   app.use('/api/compras', comprasRouter);
   app.use('/api/gastos', gastosRouter);
   app.use('/api/reportes', reportesRouter);
+  app.use('/api/impuestos', impuestosRouter);
+  app.use('/api/formas-pago', formasPagoRouter);
 
   app.use(errorHandler);
   return app;

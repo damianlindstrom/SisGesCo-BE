@@ -3,10 +3,17 @@ import { prisma } from '../../common/prisma-client';
 import { obtenerOCrearFormaPago } from '../../common/catalogos';
 
 interface ItemComprobanteInput { productoNombre: string; cantidad: number; costoUnitario: number; }
+interface ImpuestoAplicadoInput { impuestoId: number; monto: number; }
 interface ComprobanteInput {
-  proveedorId: number; tipo: TipoComprobante; nroComprobante: string; detalle?: string;
-  neto: number; iva: number; iibb: number; noGravado: number;
-  items?: ItemComprobanteInput[]; comprobanteVinculadoId?: number;
+  proveedorId: number;
+  tipo: TipoComprobante;
+  nroComprobante: string;
+  detalle?: string;
+  neto?: number;
+  noGravado?: number;
+  impuestos?: ImpuestoAplicadoInput[];
+  items?: ItemComprobanteInput[];
+  comprobanteVinculadoId?: number;
 }
 interface PagoInput { proveedorId: number; comprobanteIds: number[]; importe: number; formaPago: string; }
 
@@ -18,11 +25,13 @@ function estadoSegunSaldo(saldo: number, total: number): EstadoComprobante {
 
 export const comprasService = {
   async registrarComprobante(datos: ComprobanteInput) {
-    const montoTotal = Math.round((datos.neto + datos.iva + datos.iibb + datos.noGravado) * 100) / 100;
+    const neto = datos.neto ?? 0;
+    const noGravado = datos.noGravado ?? 0;
+    const totalImpuestos = datos.impuestos?.reduce((acc: number, i) => acc + i.monto, 0) ?? 0;
+    const montoTotal = Math.round((neto + noGravado + totalImpuestos) * 100) / 100;
 
     return prisma.$transaction(async (tx) => {
       if (datos.tipo === 'NOTA_CREDITO' && datos.comprobanteVinculadoId) {
-        // NC vinculada: cancela deuda del comprobante original, no genera saldo propio.
         const original = await tx.compraComprobante.findUniqueOrThrow({ where: { id: datos.comprobanteVinculadoId } });
         const nuevoSaldoOriginal = Math.max(0, Number(original.saldo) - montoTotal);
         await tx.compraComprobante.update({
@@ -32,32 +41,36 @@ export const comprasService = {
         return tx.compraComprobante.create({
           data: {
             proveedorId: datos.proveedorId, tipo: datos.tipo, nroComprobante: datos.nroComprobante,
-            detalle: datos.detalle, neto: datos.neto, iva: datos.iva, iibb: datos.iibb, noGravado: datos.noGravado,
+            detalle: datos.detalle, neto, noGravado,
             montoTotal, saldo: 0, estado: 'PAGADO', comprobanteVinculadoId: original.id,
+            impuestos: datos.impuestos?.length
+              ? { create: datos.impuestos.map((imp) => ({ impuestoId: imp.impuestoId, monto: imp.monto })) }
+              : undefined,
           },
         });
       }
 
-      // NC independiente: queda como crédito disponible a favor, para usar en un pago futuro.
       const estadoInicial: EstadoComprobante = datos.tipo === 'NOTA_CREDITO' ? 'CREDITO_DISPONIBLE' : 'PENDIENTE';
 
       const comprobante = await tx.compraComprobante.create({
         data: {
           proveedorId: datos.proveedorId, tipo: datos.tipo, nroComprobante: datos.nroComprobante,
-          detalle: datos.detalle, neto: datos.neto, iva: datos.iva, iibb: datos.iibb, noGravado: datos.noGravado,
+          detalle: datos.detalle, neto, noGravado,
           montoTotal, saldo: montoTotal, estado: estadoInicial,
+          impuestos: datos.impuestos?.length
+            ? { create: datos.impuestos.map((imp) => ({ impuestoId: imp.impuestoId, monto: imp.monto })) }
+            : undefined,
         },
       });
 
       if (datos.tipo === 'FACTURA_MERCADERIA' && datos.items?.length) {
         for (const item of datos.items) {
-          // "Crear si no existe": mismo criterio que actualizarStock() del GAS original.
           let producto = await tx.producto.findFirst({ where: { nombre: item.productoNombre } });
           if (!producto) {
             producto = await tx.producto.create({
               data: {
                 nombre: item.productoNombre, costo: item.costoUnitario, stock: 0,
-                pctRespInsc: 1, pctConsFinal: 1, pctCtaCte: 1, // multiplicadores a definir luego en Productos
+                pctRespInsc: 1, pctConsFinal: 1, pctCtaCte: 1,
               },
             });
           }
@@ -93,8 +106,6 @@ export const comprasService = {
         },
       });
 
-      // Reparte el importe pagado entre los comprobantes seleccionados, en
-      // el orden en que fueron elegidos, hasta agotarlo.
       let restante = datos.importe;
       const comprobantes = await tx.compraComprobante.findMany({ where: { id: { in: datos.comprobanteIds } } });
       for (const c of comprobantes) {

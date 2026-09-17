@@ -6,14 +6,26 @@ import { ventasService } from './ventas.service';
 
 const router = Router();
 
+const impuestoAplicadoSchema = z.object({
+  impuestoId: z.number(),
+  monto: z.number().nonnegative(),
+});
+
 router.post('/', asyncHandler(async (req, res) => {
   const datos = z.object({
     clienteId: z.number(),
     formaPago: z.string().min(1),
+    nroComprobante: z.string().optional(),
+    neto: z.number().nonnegative().optional().default(0),
+    noGravado: z.number().nonnegative().optional().default(0),
+    impuestos: z.array(impuestoAplicadoSchema).optional().default([]),
     items: z.array(z.object({
-      productoId: z.number(), cantidad: z.number().positive(), precioUnitario: z.number().nonnegative(),
+      productoId: z.number(),
+      cantidad: z.number().positive(),
+      precioUnitario: z.number().nonnegative(),
     })).min(1),
   }).parse(req.body);
+
   const venta = await ventasService.registrar(datos);
   res.status(201).json(ok(venta));
 }));
@@ -30,6 +42,7 @@ router.post('/cobros', asyncHandler(async (req, res) => {
     formaPago: z.string().min(1),
     observaciones: z.string().optional(),
   }).parse(req.body);
+
   const historial = await ventasService.registrarCobro(datos);
   res.status(201).json(ok(historial));
 }));

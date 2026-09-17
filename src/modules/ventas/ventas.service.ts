@@ -2,7 +2,16 @@ import { prisma } from '../../common/prisma-client';
 import { obtenerOCrearFormaPago } from '../../common/catalogos';
 
 interface ItemVentaInput { productoId: number; cantidad: number; precioUnitario: number; }
-interface VentaInput { clienteId: number; formaPago: string; items: ItemVentaInput[]; }
+interface ImpuestoAplicadoInput { impuestoId: number; monto: number; }
+interface VentaInput {
+  clienteId: number;
+  formaPago: string;
+  nroComprobante?: string;
+  neto?: number;
+  noGravado?: number;
+  impuestos?: ImpuestoAplicadoInput[];
+  items: ItemVentaInput[];
+}
 interface CobroCCInput { clienteId: number; monto: number; formaPago: string; observaciones?: string; }
 
 export const ventasService = {
@@ -18,6 +27,9 @@ export const ventasService = {
         data: {
           clienteId: datos.clienteId,
           formaPagoId,
+          nroComprobante: datos.nroComprobante,
+          neto: datos.neto ?? 0,
+          noGravado: datos.noGravado ?? 0,
           detalle: {
             create: datos.items.map((it) => ({
               productoId: it.productoId,
@@ -27,34 +39,41 @@ export const ventasService = {
               subtotal: Math.round(it.precioUnitario * it.cantidad * 100) / 100,
             })),
           },
+          impuestos: datos.impuestos?.length
+            ? {
+                create: datos.impuestos.map((imp) => ({
+                  impuestoId: imp.impuestoId,
+                  monto: imp.monto,
+                })),
+              }
+            : undefined,
         },
-        include: { detalle: true, formaPago: true },
+        include: { detalle: true, formaPago: true, impuestos: true },
       });
 
-      // Descuenta stock de cada producto vendido.
       for (const it of datos.items) {
         await tx.producto.update({ where: { id: it.productoId }, data: { stock: { decrement: it.cantidad } } });
       }
 
-      // Si se vendió a cuenta corriente, la venta también es un "Debe" en
-      // el historial del cliente — sin esto, Cuenta Corriente nunca vería la deuda.
+      const totalItems = nuevaVenta.detalle.reduce((acc, d) => acc + Number(d.subtotal), 0);
+      const totalImpuestos = nuevaVenta.impuestos.reduce((acc, i) => acc + Number(i.monto), 0);
+      const totalVenta = Math.round((Number(nuevaVenta.neto) + Number(nuevaVenta.noGravado) + totalImpuestos) * 100) / 100 || totalItems;
+
       if (nuevaVenta.formaPago.nombre.toLowerCase() === 'cuenta corriente') {
-        const total = nuevaVenta.detalle.reduce((acc, d) => acc + Number(d.subtotal), 0);
         await tx.cobroCC.create({
           data: {
             clienteId: datos.clienteId,
             concepto: `Venta #${nuevaVenta.id}`,
-            debe: total,
+            debe: totalVenta,
             haber: 0,
           },
         });
       }
 
-      return nuevaVenta;
+      return { ...nuevaVenta, total: totalVenta };
     });
 
-    const total = venta.detalle.reduce((acc, d) => acc + Number(d.subtotal), 0);
-    return { id: venta.id, fecha: venta.fecha, clienteId: venta.clienteId, formaPago: datos.formaPago, total };
+    return { id: venta.id, fecha: venta.fecha, clienteId: venta.clienteId, formaPago: datos.formaPago, total: venta.total };
   },
 
   async cuentaCorriente(clienteId: number) {
@@ -91,7 +110,7 @@ export const ventasService = {
     const [ventas, cobros, pagos, gastos] = await Promise.all([
       prisma.venta.findMany({
         where: { fecha: { gte: desde, lte: hasta } },
-        include: { detalle: true, formaPago: true, cliente: true },
+        include: { detalle: true, formaPago: true, cliente: true, impuestos: true },
       }),
       prisma.cobroCC.findMany({
         where: { fecha: { gte: desde, lte: hasta }, haber: { gt: 0 } },
@@ -109,13 +128,13 @@ export const ventasService = {
 
     const movimientos: { fecha: Date; concepto: string; formaPago: string; ingreso: number; egreso: number }[] = [];
 
-    // Las ventas a "Cuenta Corriente" no mueven caja en el momento (el
-    // ingreso real ocurre cuando se cobra, más abajo) — se excluyen acá.
-    for (const v of ventas) {
-      if (v.formaPago.nombre.toLowerCase() === 'cuenta corriente') continue;
-      const total = v.detalle.reduce((acc, d) => acc + Number(d.subtotal), 0);
-      movimientos.push({ fecha: v.fecha, concepto: `Venta a ${v.cliente.nombre}`, formaPago: v.formaPago.nombre, ingreso: total, egreso: 0 });
-    }
+for (const v of ventas) {
+  if (v.formaPago.nombre.toLowerCase() === 'cuenta corriente') continue;
+  const totalItems = v.detalle.reduce((acc: number, d) => acc + Number(d.subtotal), 0);
+  const totalImpuestos = (v.impuestos ?? []).reduce((acc: number, i: { monto: unknown }) => acc + Number(i.monto), 0);
+  const totalVenta = Math.round((Number(v.neto) + Number(v.noGravado) + totalImpuestos) * 100) / 100 || totalItems;
+  movimientos.push({ fecha: v.fecha, concepto: `Venta a ${v.cliente.nombre}`, formaPago: v.formaPago.nombre, ingreso: totalVenta, egreso: 0 });
+}
     for (const c of cobros) {
       movimientos.push({
         fecha: c.fecha, concepto: `Cobro cta. cte. — ${c.cliente.nombre}`,
