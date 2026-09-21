@@ -53,17 +53,14 @@ model FormaPago {
 // ---------- Terceros ----------
 
 model Cliente {
-  id          Int              @id @default(autoincrement())
-  nombre      String
-  dniCuit     String?          @map("dni_cuit")
-  categoriaId Int              @map("categoria_id")
-  categoria   CategoriaCliente @relation(fields: [categoriaId], references: [id])
-  createdAt   DateTime         @default(now()) @map("created_at")
-
-  ventas   Venta[]
-  cobrosCC CobroCC[]
-
-  @@map("clientes")
+  id              Int              @id @default(autoincrement())
+  nombre          String
+  dniCuit         String?
+  categoriaId     Int
+  cuentaCorriente Boolean          @default(false) // <-- Agregado aquí
+  categoria       CategoriaCliente @relation(fields: [categoriaId], references: [id])
+  ventas          Venta[]
+  cobrosCC        CobroCC[]
 }
 
 model Proveedor {

@@ -15,7 +15,9 @@ router.post('/', asyncHandler(async (req, res) => {
     nombre: z.string().min(1),
     dniCuit: z.string().optional(),
     categoriaId: z.number(),
+    cuentaCorriente: z.boolean().optional().default(false), // <-- Agregado
   }).parse(req.body);
+  
   const creado = await clientesService.crear(datos);
   res.status(201).json(ok(creado));
 }));
