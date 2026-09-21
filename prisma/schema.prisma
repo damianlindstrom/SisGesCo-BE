@@ -40,7 +40,7 @@ model Impuesto {
 }
 model FormaPago {
   id          Int          @id @default(autoincrement())
-  nombre      String
+  nombre      String       @unique
   descripcion String?
   activa      Boolean      @default(true)
 
