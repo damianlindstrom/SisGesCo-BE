@@ -109,6 +109,85 @@ export const reportesService = {
       resultadoNeto: round2(resultadoNeto),
     };
   },
+
+  async resumenFormaPago(formaPagoId: number, desde: Date, hasta: Date) {
+    const formaPago = await prisma.formaPago.findUniqueOrThrow({ where: { id: formaPagoId } });
+
+    const [ventas, cobros, pagos, gastos] = await Promise.all([
+      prisma.venta.findMany({
+        where: { formaPagoId, fecha: { gte: desde, lte: hasta } },
+        include: { detalle: true, cliente: true, impuestos: true },
+      }),
+      prisma.cobroCC.findMany({
+        where: { formaPagoId, fecha: { gte: desde, lte: hasta }, haber: { gt: 0 } },
+        include: { cliente: true },
+      }),
+      prisma.compraPago.findMany({
+        where: { formaPagoId, fecha: { gte: desde, lte: hasta } },
+        include: { proveedor: true },
+      }),
+      prisma.gastoVario.findMany({
+        where: { formaPagoId, fecha: { gte: desde, lte: hasta } },
+      }),
+    ]);
+
+    const movimientos: { fecha: Date; concepto: string; tipo: string; monto: number }[] = [];
+
+    for (const v of ventas) {
+      if (v.formaPagoId && v.formaPagoId === formaPagoId) {
+        if (formaPago.nombre.toLowerCase() === 'cuenta corriente') continue;
+        const totalItems = v.detalle.reduce((acc: number, d) => acc + Number(d.subtotal), 0);
+        const totalImpuestos = (v.impuestos ?? []).reduce((acc: number, i: { monto: unknown }) => acc + Number(i.monto), 0);
+        const totalVenta = Math.round((Number(v.neto) + Number(v.noGravado) + totalImpuestos) * 100) / 100 || totalItems;
+        movimientos.push({
+          fecha: v.fecha,
+          concepto: `Venta a ${v.cliente.nombre}`,
+          tipo: 'Venta',
+          monto: totalVenta, // positivo
+        });
+      }
+    }
+
+    for (const c of cobros) {
+      movimientos.push({
+        fecha: c.fecha,
+        concepto: `Cobro cta. cte. — ${c.cliente.nombre}`,
+        tipo: 'Cobro Cuenta Corriente',
+        monto: Number(c.haber), // positivo
+      });
+    }
+
+    for (const p of pagos) {
+      movimientos.push({
+        fecha: p.fecha,
+        concepto: `Pago a ${p.proveedor.nombre}`,
+        tipo: 'Pago Compra',
+        monto: -Number(p.importe), // negativo
+      });
+    }
+
+    for (const g of gastos) {
+      movimientos.push({
+        fecha: g.fecha,
+        concepto: g.nombreCorto,
+        tipo: 'Gasto Vario',
+        monto: -Number(g.importe), // negativo
+      });
+    }
+
+    movimientos.sort((a, b) => a.fecha.getTime() - b.fecha.getTime());
+
+    const totalGeneral = Math.round(movimientos.reduce((acc, m) => acc + m.monto, 0) * 100) / 100;
+
+    return {
+      formaPago: formaPago.nombre,
+      activa: formaPago.activa,
+      desde: desde.toISOString(),
+      hasta: hasta.toISOString(),
+      movimientos: movimientos.map(m => ({ ...m, monto: round2(m.monto) })),
+      totalGeneral,
+    };
+  },
 };
 
 function round2(n: number): number {

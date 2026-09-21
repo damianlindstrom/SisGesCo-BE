@@ -47,10 +47,4 @@ router.post('/cobros', asyncHandler(async (req, res) => {
   res.status(201).json(ok(historial));
 }));
 
-router.get('/arqueo', asyncHandler(async (req, res) => {
-  const { desde, hasta } = z.object({ desde: z.string(), hasta: z.string() }).parse(req.query);
-  const resumen = await ventasService.arqueo(new Date(`${desde}T00:00:00`), new Date(`${hasta}T23:59:59`));
-  res.json(ok(resumen));
-}));
-
 export default router;

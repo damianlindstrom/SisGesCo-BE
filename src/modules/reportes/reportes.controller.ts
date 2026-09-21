@@ -25,4 +25,12 @@ router.get('/resultado-periodo', asyncHandler(async (req, res) => {
   res.json(ok(resultado));
 }));
 
+router.get('/resumen-forma-pago', asyncHandler(async (req, res) => {
+  const { formaPagoId, desde, hasta } = z.object({
+    formaPagoId: z.string(), desde: z.string(), hasta: z.string(),
+  }).parse(req.query);
+  const resultado = await reportesService.resumenFormaPago(Number(formaPagoId), new Date(`${desde}T00:00:00`), new Date(`${hasta}T23:59:59`));
+  res.json(ok(resultado));
+}));
+
 export default router;
