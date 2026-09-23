@@ -33,4 +33,20 @@ router.get('/resumen-forma-pago', asyncHandler(async (req, res) => {
   res.json(ok(resultado));
 }));
 
+router.get('/movimientos', asyncHandler(async (req, res) => {
+  const { modulo } = z.object({
+    modulo: z.string().optional(),
+  }).passthrough().parse(req.query);
+
+  const { desde, hasta } = parseRango(req.query);
+  const historial = await reportesService.movimientos(desde, hasta, modulo);
+  res.json(ok(historial));
+}));
+
+router.get('/clientes-proveedores', asyncHandler(async (req, res) => {
+  const { desde, hasta } = parseRango(req.query);
+  const reporte = await reportesService.reporteClientesProveedores(desde, hasta);
+  res.json(ok(reporte));
+}));
+
 export default router;

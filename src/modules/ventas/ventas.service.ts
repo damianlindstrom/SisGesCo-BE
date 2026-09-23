@@ -71,6 +71,9 @@ export const ventasService = {
       }
 
       return { ...nuevaVenta, total: totalVenta };
+    }, {
+      maxWait: 5000,
+      timeout: 15000
     });
 
     return { id: venta.id, fecha: venta.fecha, clienteId: venta.clienteId, formaPago: datos.formaPago, total: venta.total };
